@@ -1,0 +1,138 @@
+---
+title: "Practical Machine Learning - Final Project"
+author: "Victor Ceron"
+date: "June 2, 2018"
+output: html_document
+---
+
+# Title: "Practical Machine Learning - Project"
+ Author: "Victor Ceron"  
+ Date: "June 23, 2018"  
+  Output: html_document  
+
+
+## Part 1: Analysis Description
+### Explanation of dataset:
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively.
+We propose a dataset with 5 classes (sitting-down, standing-up, standing, walking, and sitting) collected on 8 hours of activities of 4 healthy subjects.
+
+### Purpose:
+Below we build several models and assess their out-of-sample effectiveness. We build individual Random Forest, Naive Bayes and Gradient Boosting Algorithm; also, we combine these 3 models using Generalize Additive Model. 
+
+### 0. Load packages
+```{r load_libs, cache=FALSE, results='markup', warning=FALSE, message=FALSE}
+library(caret)
+library(lubridate)
+library(doParallel)
+library(rattle)
+```
+
+
+
+### 1. Load data: Data is loaded and every blank, NA and #Div/0! are classified as NAs.
+```{r load_data, cache=TRUE, results='markup' }
+setwd("Z:/Victor/Data Science/Practical Machine Learning")
+pml_training<-read.csv("pml-training.csv", na.strings = c("#DIV/0!", "", "NA"))
+pml_testing<-read.csv("pml-testing.csv", na.strings = c("#DIV/0!", "", "NA"))
+```
+
+### 2. Clean data: We discard predictors with majority of NAs; also predictors with Near Zero Variance. The data is then sorted by time. 
+After looking at the data, a decision was made that timestamp data, user name, and window information are not useful to build a prediction model. Also, by looking at near-zero variance data, the decision was reinforced to discard new_window information. 
+
+Both criteria call for discarding columns 1 to 7. This is a welcome development as we can make our model more efficient by dropping irrelevant variables. 
+```{r clean_data, cache=TRUE, results='markup' }
+pml<-complete.cases(pml_testing) #complete.cases returns a logical vector indicating which cases are complete, i.e., have no missing values
+pml_testing_noNAscols<-pml_testing[,colSums(is.na(pml_testing))<nrow(pml_testing)]
+pml_training_noNAscols<-pml_training[,colSums(is.na(pml_training))<nrow(pml_training)]
+cols_to_keep<-intersect(colnames(pml_testing_noNAscols),colnames(pml_training_noNAscols))
+pml_testing_noNAscols_common<-pml_testing_noNAscols[,cols_to_keep, drop=FALSE]
+pml_training_noNAscols_common<-pml_training_noNAscols[,cols_to_keep, drop=FALSE]
+nearZeroVar(pml_training_noNAscols_common,saveMetrics = TRUE)
+nearZeroVar(pml_testing_noNAscols_common,saveMetrics = TRUE)
+pml_testing_noNAscols_common_noNZV<-pml_testing_noNAscols_common[,-c(1:7)]
+pml_training_noNAscols_common_noNZV<-pml_training_noNAscols_common[,-c(1:7)]
+pml_training_noNAscols_common_noNZV$classe<-pml_training$classe
+```
+
+### 3. Data splitting: We split the training set in 3 parts: TRAIN, TEST and VAL (validation). Given that the data has a temporal component. It was decided to split the data 70%/15%/15% respectively
+```{r train_test_val_sets, cache=FALSE, results='markup'  }
+index_train <- caret::createDataPartition(y=pml_training$classe, p=0.70, list=FALSE)
+
+TRAIN_pml_training_noNAscols_common_noNZV<-pml_training_noNAscols_common_noNZV[index_train,]
+preTEST_pml_training_noNAscols_common_noNZV<-pml_training_noNAscols_common_noNZV[-index_train,]
+index_test_val <- caret::createDataPartition(y=preTEST_pml_training_noNAscols_common_noNZV$classe, p=0.50, list=FALSE)
+VAL_pml_training_noNAscols_common_noNZV<-preTEST_pml_training_noNAscols_common_noNZV[-index_test_val,]
+TEST_pml_training_noNAscols_common_noNZV<-preTEST_pml_training_noNAscols_common_noNZV[index_test_val,]
+
+```
+
+### 4. Allow parallel processing and define train control paameters to allow for repeated cross-validation.  
+```{r set_seed_multicore, cache=TRUE, results='markup' }
+set.seed(1409)
+cl<-makeCluster(3)
+registerDoParallel( cl )
+trControl <- caret::trainControl( method = "repeatedcv", number = 10, repeats = 5, verboseIter = FALSE, allowParallel = TRUE )
+```
+
+### 5.1 Build random forest model. And run the model using the TEST set. Accuracy ~ 100%.... 
+```{r random_forest, cache=TRUE, results='markup' }
+ModRF <- train(classe~., data = TRAIN_pml_training_noNAscols_common_noNZV, trControl = trControl, method = "rf" )
+```
+
+
+
+```{r random_forest_results, cache=TRUE, results='markup' }
+PredRF_Test<-predict(ModRF,newdata=TEST_pml_training_noNAscols_common_noNZV)
+confRF<-confusionMatrix(TEST_pml_training_noNAscols_common_noNZV$classe,PredRF_Test)
+confRF
+```
+
+```{r random_forest_plot, cache=TRUE, results='markup' }
+plot(confRF$table, col = confRF$byClass, main = paste("Accuracy Random Forest =", round(confRF$overall['Accuracy'], 4)))
+```
+
+### 5.2 Build Naive Bayes model. And run the model using the TEST set. Accuracy ~ 89%
+```{r naive_bayes, cache=TRUE, results='markup', warning=FALSE}
+ModNB <- train(classe~., data = TRAIN_pml_training_noNAscols_common_noNZV, trControl = trControl, method = "nb" )
+``` 
+
+```{r naive_bayes_results, cache=TRUE, results='markup', warning=FALSE}
+PredNB_Test<-predict(ModNB,newdata=TEST_pml_training_noNAscols_common_noNZV)
+confusionMatrix(TEST_pml_training_noNAscols_common_noNZV$classe,PredNB_Test)
+```
+
+### 5.3 Build Gradient Boosting Algorithm model. And run the model using the TEST set. Accuracy ~ 99%
+```{r GBM, cache=TRUE, results='markup', warning=FALSE}
+ModGBM <- train(classe~., data = TRAIN_pml_training_noNAscols_common_noNZV, trControl = trControl, method = "gbm",verbose=FALSE )
+```
+
+```{r GBM_results, cache=TRUE, results='markup', warning=FALSE}
+PredGBM_Test<-predict(ModGBM,newdata=TEST_pml_training_noNAscols_common_noNZV)
+confusionMatrix(TEST_pml_training_noNAscols_common_noNZV$classe,PredGBM_Test)
+```
+
+### 5.4 Build combineed Generalize Additive Model by combining the previous 3 build models. As accuracy was already very high with the random forest model, this was done for exploratory purposes only 
+```{r RF_combine_predictors, cache=TRUE, results='markup', warning=FALSE}
+GAMcomb<-data.frame(PredRF=PredRF_Test,PredNB=PredNB_Test,PredGBM=PredGBM_Test, classe=TEST_pml_training_noNAscols_common_noNZV$classe)
+ModGAMcomb <- train(classe~., data = GAMcomb, trControl = trControl, method = "gam" )
+```
+
+### 5.5 Run every model in VAL set. [RF - 99.7%; NB- 74%; GBM - 97%; combined GAM - 21%]
+```{r RF_combine_predictors_results_VAL, cache=TRUE, results='markup', warning=FALSE}
+PredRF_VAL<-predict(ModRF,newdata=VAL_pml_training_noNAscols_common_noNZV)
+confusionMatrix(VAL_pml_training_noNAscols_common_noNZV$classe,PredRF_VAL)
+PredNB_VAL<-predict(ModNB,newdata=VAL_pml_training_noNAscols_common_noNZV)
+confusionMatrix(VAL_pml_training_noNAscols_common_noNZV$classe,PredNB_VAL)
+PredGBM_VAL<-predict(ModGBM,newdata=VAL_pml_training_noNAscols_common_noNZV)
+confusionMatrix(VAL_pml_training_noNAscols_common_noNZV$classe,PredGBM_VAL)
+predGAMVAL<-data.frame(PredRF=PredRF_VAL,PredNB=PredNB_VAL,PredGBM=PredGBM_VAL)
+combpredGAMVAL<-predict(ModGAMcomb,predGAMVAL)
+confusionMatrix(VAL_pml_training_noNAscols_common_noNZV$classe,combpredGAMVAL)
+```
+
+### 6 Run best model, RF, to get predictions from test cases.  
+```{r testa, cache=TRUE, results='markup', warning=FALSE}
+PredRF_TESTCASES<-predict(ModRF,newdata=pml_testing_noNAscols_common_noNZV)
+PredRF_TESTCASES
+```
+
